@@ -1,6 +1,6 @@
 # 🤖 Autonomous AI Agent — Math Engine & PDF RAG Assistant
 
-An autonomous, multi-modal AI Agent system built using **Model Context Protocol (MCP)**, **LangChain**, **Groq (Llama 3.1 8B)**, **ChromaDB**, and **Streamlit**. 
+An autonomous, multi-modal AI Agent system built using **Model Context Protocol (MCP)**, **LangChain**, **Groq (Qwen 3.8 27B)**, **ChromaDB**, and **Streamlit**. 
 
 This system guarantees zero arithmetic hallucinations by routing mathematical expressions to a safe, deterministic FastMCP execution server while serving localized Retrieval-Augmented Generation (RAG) over uploaded PDF documents using local HuggingFace embeddings.
 
@@ -71,7 +71,7 @@ This system guarantees zero arithmetic hallucinations by routing mathematical ex
 - **Frontend UI**: Streamlit (with custom Glassmorphic styling)
 - **Agent Orchestration**: LangChain Classic, LangChain Core, LangChain Groq
 - **Protocol**: Model Context Protocol (FastMCP + `langchain-mcp-adapters`)
-- **LLM Engine**: Groq (`llama-3.1-8b-instant`)
+- **LLM Engine**: Groq (`qwen/qwen3.8-27b`)
 - **Vector Database**: ChromaDB
 - **Embedding Model**: HuggingFace `sentence-transformers/all-MiniLM-L6-v2`
 - **PDF Parser**: PyPDF Loader

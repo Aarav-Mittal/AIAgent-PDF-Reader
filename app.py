@@ -38,6 +38,7 @@ except Exception:
     pass
 
 MCP_SERVER_URL = "http://127.0.0.1:8050/mcp"
+GROQ_MODEL = "qwen/qwen3.8-27b"
 
 # ---------------------------------------------------------
 # Custom Styling (Glassmorphism & Modern UI)
@@ -201,7 +202,7 @@ async def fetch_mcp_tools():
 def init_agent_executor(tools, api_key: str):
     """Initialize LangChain AgentExecutor with Groq model and MCP tools."""
     model = ChatGroq(
-        model="llama-3.1-8b-instant",
+        model=GROQ_MODEL,
         temperature=0.1,
         api_key=api_key
     )
@@ -283,7 +284,7 @@ def run_agent_query(user_prompt: str, chat_history: list):
         active_key = os.getenv("GROQ_API_KEY") or st.session_state.get("user_groq_key", "")
         if "429" in err_str or "Rate limit" in err_str or "rate_limit_exceeded" in err_str:
             fallback_model = ChatGroq(
-                model="llama-3.1-8b-instant",
+                model=GROQ_MODEL,
                 temperature=0.1,
                 api_key=active_key
             )
@@ -291,7 +292,7 @@ def run_agent_query(user_prompt: str, chat_history: list):
             return fallback_res.content, []
         elif "Failed to call a function" in err_str or "failed_generation" in err_str or "failed" in err_str.lower():
             fallback_model = ChatGroq(
-                model="llama-3.1-8b-instant",
+                model=GROQ_MODEL,
                 temperature=0.1,
                 api_key=active_key
             )

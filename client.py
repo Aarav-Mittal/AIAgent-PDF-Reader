@@ -17,7 +17,7 @@ load_dotenv(dotenv_path=dotenv_path)
     
 
 model = ChatGroq(
-    model="llama-3.3-70b-versatile",
+    model="qwen/qwen3.8-27b",
     temperature=0.1,
     api_key=os.getenv("GROQ_API_KEY")
 )
