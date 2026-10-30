@@ -1,0 +1,21 @@
+# Environment & secrets
+.env
+
+# Virtual environments & caches
+.venv/
+__pycache__/
+*.py[oc]
+build/
+dist/
+wheels/
+*.egg-info
+
+# Local databases and runtime uploads
+chroma_db/
+temp_uploads/
+
+# Excluded projects & notebooks
+Assignment1_GenAI.ipynb
+*.ipynb
+devops_copilot/
+package.json
