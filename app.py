@@ -186,8 +186,8 @@ def start_background_mcp_server():
 # Auto-launch FastMCP server on startup
 start_background_mcp_server()
 
-async def init_agent_executor():
-    """Connect to MCP server and initialize LangChain AgentExecutor."""
+async def fetch_mcp_tools():
+    """Connect to MCP server and fetch tools list."""
     client = MultiServerMCPClient(
         {
             "mcp_server_http": {
@@ -196,13 +196,14 @@ async def init_agent_executor():
             }
         }
     )
-    
-    tools = await client.get_tools()
-    
+    return await client.get_tools()
+
+def init_agent_executor(tools, api_key: str):
+    """Initialize LangChain AgentExecutor with Groq model and MCP tools."""
     model = ChatGroq(
         model="llama-3.1-8b-instant",
         temperature=0.1,
-        api_key=os.getenv("GROQ_API_KEY")
+        api_key=api_key
     )
     
     system_prompt = (
@@ -246,7 +247,7 @@ async def init_agent_executor():
         handle_parsing_errors=True
     )
     
-    return agent_executor, tools
+    return agent_executor
 
 
 def run_agent_query(user_prompt: str, chat_history: list):
@@ -279,11 +280,12 @@ def run_agent_query(user_prompt: str, chat_history: list):
         return response_obj.get("output", ""), response_obj.get("intermediate_steps", [])
     except Exception as e:
         err_str = str(e)
+        active_key = os.getenv("GROQ_API_KEY") or st.session_state.get("user_groq_key", "")
         if "429" in err_str or "Rate limit" in err_str or "rate_limit_exceeded" in err_str:
             fallback_model = ChatGroq(
                 model="llama-3.1-8b-instant",
                 temperature=0.1,
-                api_key=os.getenv("GROQ_API_KEY")
+                api_key=active_key
             )
             fallback_res = fallback_model.invoke(formatted_input)
             return fallback_res.content, []
@@ -291,7 +293,7 @@ def run_agent_query(user_prompt: str, chat_history: list):
             fallback_model = ChatGroq(
                 model="llama-3.1-8b-instant",
                 temperature=0.1,
-                api_key=os.getenv("GROQ_API_KEY")
+                api_key=active_key
             )
             fallback_res = fallback_model.invoke(formatted_input)
             return fallback_res.content, []
@@ -313,18 +315,31 @@ if "langchain_chat_history" not in st.session_state:
 if "indexed_pdf" not in st.session_state:
     st.session_state.indexed_pdf = None
 
-if st.session_state.get("agent_executor") is None:
-    if check_mcp_server_online():
-        with st.spinner("Connecting to FastMCP Server & Initializing Agent..."):
-            try:
-                agent_exec, tools_list = asyncio.run(init_agent_executor())
-                st.session_state.agent_executor = agent_exec
-                st.session_state.mcp_tools = tools_list
-                st.session_state.pop("init_error", None)
-            except Exception as e:
-                st.session_state.agent_executor = None
-                st.session_state.mcp_tools = []
-                st.session_state.init_error = str(e)
+# 1. Discover tools from FastMCP server independently
+if not st.session_state.get("mcp_tools") and check_mcp_server_online():
+    try:
+        tools_list = asyncio.run(fetch_mcp_tools())
+        st.session_state.mcp_tools = tools_list
+        st.session_state.pop("tools_error", None)
+    except Exception as e:
+        st.session_state.mcp_tools = []
+        st.session_state.tools_error = str(e)
+
+# 2. Get active Groq API key from environment, secrets, or user input
+active_groq_key = os.getenv("GROQ_API_KEY") or st.session_state.get("user_groq_key", "")
+
+# 3. Initialize AgentExecutor if tools are loaded and key is provided
+if st.session_state.get("agent_executor") is None and st.session_state.get("mcp_tools"):
+    if active_groq_key:
+        try:
+            agent_exec = init_agent_executor(st.session_state.mcp_tools, active_groq_key)
+            st.session_state.agent_executor = agent_exec
+            st.session_state.pop("init_error", None)
+        except Exception as e:
+            st.session_state.agent_executor = None
+            st.session_state.init_error = str(e)
+    else:
+        st.session_state.init_error = "GROQ_API_KEY is missing. Please enter your Groq API key in the sidebar below or add it to Streamlit Secrets."
 
 # ---------------------------------------------------------
 # Sidebar Layout
@@ -336,13 +351,9 @@ with st.sidebar:
     server_online = check_mcp_server_online()
     st.subheader("Server Status")
     if server_online:
-        st.markdown('<div class="status-badge-online">● FastMCP Server Online</div>', unsafe_allow_html=True)
+        tools_count = len(st.session_state.get("mcp_tools", []))
+        st.markdown(f'<div class="status-badge-online">● FastMCP Server Online ({tools_count} tools)</div>', unsafe_allow_html=True)
         st.caption(f"Endpoint: `{MCP_SERVER_URL}`")
-        if st.session_state.get("agent_executor") is None:
-            if st.button("🔄 Connect Agent to Server", type="primary", use_container_width=True):
-                st.session_state.pop("agent_executor", None)
-                st.session_state.pop("mcp_tools", None)
-                st.rerun()
     else:
         st.markdown('<div class="status-badge-offline">● FastMCP Server Offline</div>', unsafe_allow_html=True)
         if "init_error" in st.session_state:
@@ -351,9 +362,34 @@ with st.sidebar:
         if st.button("🚀 Start / Reconnect Server", type="primary", use_container_width=True):
             start_background_mcp_server.clear()
             start_background_mcp_server()
-            st.session_state.pop("agent_executor", None)
             st.session_state.pop("mcp_tools", None)
+            st.session_state.pop("agent_executor", None)
             st.rerun()
+
+    # Groq API Key Configuration
+    st.subheader("🔑 Groq API Key")
+    if os.getenv("GROQ_API_KEY") and not st.session_state.get("user_groq_key"):
+        st.caption("✅ Loaded from environment / Streamlit Secrets")
+    else:
+        user_key = st.text_input(
+            "Enter GROQ_API_KEY:",
+            value=st.session_state.get("user_groq_key", ""),
+            type="password",
+            placeholder="gsk_...",
+            help="Get a free API key at https://console.groq.com"
+        )
+        if user_key and user_key != st.session_state.get("user_groq_key"):
+            st.session_state.user_groq_key = user_key
+            os.environ["GROQ_API_KEY"] = user_key
+            st.session_state.pop("agent_executor", None)
+            st.rerun()
+
+    if "init_error" in st.session_state and st.session_state.get("agent_executor") is None:
+        with st.expander("⚠️ Agent Status", expanded=True):
+            st.warning(st.session_state.init_error)
+            if st.button("🔄 Initialize Agent", use_container_width=True):
+                st.session_state.pop("agent_executor", None)
+                st.rerun()
 
     st.divider()
 
@@ -390,13 +426,19 @@ with st.sidebar:
 
     # Registered MCP Tools View
     st.subheader("🛠️ Active MCP Tools")
-    if st.session_state.mcp_tools:
-        st.caption(f"Loaded **{len(st.session_state.mcp_tools)}** tools via HTTP Transport")
+    if st.session_state.get("mcp_tools"):
+        st.caption(f"Loaded **{len(st.session_state.mcp_tools)}** tools via FastMCP")
         for tool in st.session_state.mcp_tools:
             with st.expander(f"⚙️ `{tool.name}`"):
                 st.write(tool.description or "No description provided.")
     else:
-        st.info("No tools currently loaded. Ensure the server is online.")
+        if "tools_error" in st.session_state:
+            st.error(f"Error discovering tools: {st.session_state.tools_error}")
+        else:
+            st.info("No tools currently loaded. Click 'Fetch Tools Now' below.")
+        if st.button("🔄 Fetch Tools Now", use_container_width=True):
+            st.session_state.pop("mcp_tools", None)
+            st.rerun()
 
     st.divider()
     
