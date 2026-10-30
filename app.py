@@ -1,6 +1,9 @@
 import streamlit as st
 import asyncio
 import os
+import sys
+import time
+import subprocess
 import urllib.request
 from pathlib import Path
 from dotenv import load_dotenv
@@ -22,6 +25,15 @@ st.set_page_config(
 script_dir = Path(__file__).resolve().parent
 dotenv_path = script_dir / '.env'
 load_dotenv(dotenv_path=dotenv_path)
+
+# Bridge Streamlit Cloud Secrets into os.environ
+try:
+    if hasattr(st, "secrets"):
+        for key, value in st.secrets.items():
+            if isinstance(value, str) and key not in os.environ:
+                os.environ[key] = value
+except Exception:
+    pass
 
 MCP_SERVER_URL = "http://localhost:8050/mcp"
 
@@ -130,6 +142,30 @@ def check_mcp_server_online():
             return result == 0
         except Exception:
             return False
+
+@st.cache_resource
+def start_background_mcp_server():
+    """Ensure FastMCP server is running in the background."""
+    if not check_mcp_server_online():
+        server_script = Path(__file__).resolve().parent / "mcp_server.py"
+        try:
+            process = subprocess.Popen(
+                [sys.executable, str(server_script)],
+                stdout=subprocess.DEVNULL,
+                stderr=subprocess.DEVNULL
+            )
+            # Give server time to bind port 8050
+            for _ in range(12):
+                time.sleep(0.5)
+                if check_mcp_server_online():
+                    break
+            return process
+        except Exception:
+            return None
+    return None
+
+# Auto-launch FastMCP server on startup
+start_background_mcp_server()
 
 async def init_agent_executor():
     """Connect to MCP server and initialize LangChain AgentExecutor."""
