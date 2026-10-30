@@ -3,8 +3,10 @@ import asyncio
 import os
 import sys
 import time
+import threading
 import subprocess
 import urllib.request
+import urllib.error
 from pathlib import Path
 from dotenv import load_dotenv
 
@@ -35,7 +37,7 @@ try:
 except Exception:
     pass
 
-MCP_SERVER_URL = "http://localhost:8050/mcp"
+MCP_SERVER_URL = "http://127.0.0.1:8050/mcp"
 
 # ---------------------------------------------------------
 # Custom Styling (Glassmorphism & Modern UI)
@@ -131,13 +133,16 @@ def check_mcp_server_online():
     try:
         req = urllib.request.Request(MCP_SERVER_URL, method="GET")
         with urllib.request.urlopen(req, timeout=1.5) as resp:
-            return resp.status in (200, 404, 405)
+            return True
+    except urllib.error.HTTPError:
+        # FastMCP streamable-http returns 406 or 405 on raw GET, proving it is alive and responding
+        return True
     except Exception:
         try:
             import socket
             sock = socket.socket(socket.AF_INET, socket.SOCK_STREAM)
             sock.settimeout(1)
-            result = sock.connect_ex(('localhost', 8050))
+            result = sock.connect_ex(('127.0.0.1', 8050))
             sock.close()
             return result == 0
         except Exception:
@@ -147,21 +152,35 @@ def check_mcp_server_online():
 def start_background_mcp_server():
     """Ensure FastMCP server is running in the background."""
     if not check_mcp_server_online():
-        server_script = Path(__file__).resolve().parent / "mcp_server.py"
+        # First approach: run in a daemon thread directly inside this Python process
         try:
-            process = subprocess.Popen(
-                [sys.executable, str(server_script)],
-                stdout=subprocess.DEVNULL,
-                stderr=subprocess.DEVNULL
+            from mcp_server import mcp
+            thread = threading.Thread(
+                target=mcp.run,
+                kwargs={"transport": "streamable-http", "host": "0.0.0.0", "port": 8050},
+                daemon=True
             )
-            # Give server time to bind port 8050
-            for _ in range(12):
-                time.sleep(0.5)
+            thread.start()
+            for _ in range(25):
+                time.sleep(0.3)
                 if check_mcp_server_online():
                     break
-            return process
+            return thread
         except Exception:
-            return None
+            # Fallback approach: subprocess with explicit environment inheritance
+            try:
+                server_script = Path(__file__).resolve().parent / "mcp_server.py"
+                process = subprocess.Popen(
+                    [sys.executable, str(server_script)],
+                    env=dict(os.environ)
+                )
+                for _ in range(25):
+                    time.sleep(0.3)
+                    if check_mcp_server_online():
+                        break
+                return process
+            except Exception:
+                return None
     return None
 
 # Auto-launch FastMCP server on startup
@@ -294,16 +313,18 @@ if "langchain_chat_history" not in st.session_state:
 if "indexed_pdf" not in st.session_state:
     st.session_state.indexed_pdf = None
 
-if "agent_executor" not in st.session_state or "mcp_tools" not in st.session_state:
-    with st.spinner("Connecting to FastMCP Server & Initializing Agent..."):
-        try:
-            agent_exec, tools_list = asyncio.run(init_agent_executor())
-            st.session_state.agent_executor = agent_exec
-            st.session_state.mcp_tools = tools_list
-        except Exception as e:
-            st.session_state.agent_executor = None
-            st.session_state.mcp_tools = []
-            st.session_state.init_error = str(e)
+if st.session_state.get("agent_executor") is None:
+    if check_mcp_server_online():
+        with st.spinner("Connecting to FastMCP Server & Initializing Agent..."):
+            try:
+                agent_exec, tools_list = asyncio.run(init_agent_executor())
+                st.session_state.agent_executor = agent_exec
+                st.session_state.mcp_tools = tools_list
+                st.session_state.pop("init_error", None)
+            except Exception as e:
+                st.session_state.agent_executor = None
+                st.session_state.mcp_tools = []
+                st.session_state.init_error = str(e)
 
 # ---------------------------------------------------------
 # Sidebar Layout
@@ -317,9 +338,22 @@ with st.sidebar:
     if server_online:
         st.markdown('<div class="status-badge-online">● FastMCP Server Online</div>', unsafe_allow_html=True)
         st.caption(f"Endpoint: `{MCP_SERVER_URL}`")
+        if st.session_state.get("agent_executor") is None:
+            if st.button("🔄 Connect Agent to Server", type="primary", use_container_width=True):
+                st.session_state.pop("agent_executor", None)
+                st.session_state.pop("mcp_tools", None)
+                st.rerun()
     else:
         st.markdown('<div class="status-badge-offline">● FastMCP Server Offline</div>', unsafe_allow_html=True)
-        st.warning("Please start the MCP server: `uv run python mcp_server.py`")
+        if "init_error" in st.session_state:
+            with st.expander("Show Connection Details"):
+                st.caption(st.session_state.init_error)
+        if st.button("🚀 Start / Reconnect Server", type="primary", use_container_width=True):
+            start_background_mcp_server.clear()
+            start_background_mcp_server()
+            st.session_state.pop("agent_executor", None)
+            st.session_state.pop("mcp_tools", None)
+            st.rerun()
 
     st.divider()
 
